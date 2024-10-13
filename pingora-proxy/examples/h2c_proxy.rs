@@ -1,6 +1,5 @@
 //! test h2c proxy ,include grpc
 
-use std::string::ParseError;
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
@@ -8,12 +7,7 @@ use clap::Parser;
 use log::info;
 use pingora_core::apps::HttpServerOptions;
 use pingora_core::protocols::ALPN;
-use pingora_core::upstreams::peer::Peer;
-use pingora_core::Result;
-use pingora_core::{
-    prelude::{background_service, HttpPeer, Opt},
-    server::Server,
-};
+use pingora_core::{prelude::{background_service, HttpPeer, Opt}, server::Server, Result};
 use pingora_load_balancing::{health_check, prelude::RoundRobin, LoadBalancer};
 use pingora_proxy::{ProxyHttp, Session};
 
