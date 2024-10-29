@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#[cfg(feature = "openssl_derived")]
-mod boringssl_openssl;
+pub mod client;
+pub mod server;
+mod stream;
 
-#[cfg(feature = "openssl_derived")]
-pub use boringssl_openssl::*;
+pub use stream::*;
 
-#[cfg(feature = "rustls")]
-mod rustls;
+use crate::utils::tls::WrappedX509;
 
-#[cfg(feature = "rustls")]
-pub use rustls::*;
+pub type CaType = [WrappedX509];
+
+pub struct TlsRef;

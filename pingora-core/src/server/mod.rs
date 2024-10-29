@@ -194,11 +194,14 @@ impl Server {
     ///
     /// If a configuration file path is provided as part of `opt`, it will be ignored
     /// and a warning will be logged.
-    pub fn new_with_opt_and_conf(opt: Opt, mut conf: ServerConf) -> Server {
-        if let Some(c) = opt.conf.as_ref() {
-            warn!("Ignoring command line argument using '{c}' as configuration, and using provided configuration instead.");
+    pub fn new_with_opt_and_conf(raw_opt: impl Into<Option<Opt>>, mut conf: ServerConf) -> Server {
+        let opt = raw_opt.into();
+        if let Some(opts) = &opt {
+            if let Some(c) = opts.conf.as_ref() {
+                warn!("Ignoring command line argument using '{c}' as configuration, and using provided configuration instead.");
+            }
+            conf.merge_with_opt(opts);
         }
-        conf.merge_with_opt(&opt);
 
         let (tx, rx) = watch::channel(false);
 
@@ -209,7 +212,7 @@ impl Server {
             shutdown_watch: tx,
             shutdown_recv: rx,
             configuration: Arc::new(conf),
-            options: Some(opt),
+            options: opt,
             #[cfg(feature = "sentry")]
             sentry: None,
         }
@@ -246,6 +249,7 @@ impl Server {
 
         Ok(Server {
             services: vec![],
+            #[cfg(unix)]
             listen_fds: None,
             shutdown_watch: tx,
             shutdown_recv: rx,

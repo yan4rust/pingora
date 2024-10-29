@@ -44,6 +44,7 @@ pub trait TlsAccept {
     /// This function is called in the middle of a TLS handshake. Structs who
     /// implement this function should provide tls certificate and key to the
     /// [TlsRef] via `ssl_use_certificate` and `ssl_use_private_key`.
+    /// Note. This is only supported for openssl and boringssl
     async fn certificate_callback(&self, _ssl: &mut TlsRef) -> () {
         // does nothing by default
     }
@@ -71,6 +72,7 @@ pub(crate) struct TransportStack {
     l4: ListenerEndpoint,
     tls: Option<Arc<Acceptor>>,
     // listeners sent from the old process for graceful upgrade
+    #[cfg(unix)]
     upgrade_listeners: Option<ListenFds>,
 }
 
