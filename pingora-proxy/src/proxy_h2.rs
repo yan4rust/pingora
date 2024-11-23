@@ -15,6 +15,7 @@
 use super::*;
 use crate::proxy_cache::{range_filter::RangeBodyFilter, ServeFromCache};
 use crate::proxy_common::*;
+use http::{header::CONTENT_LENGTH, Method, StatusCode};
 use pingora_core::protocols::http::v2::client::{write_body, Http2Session};
 
 // add scheme and authority as required by h2 lib
@@ -408,6 +409,7 @@ impl<SV> HttpProxy<SV> {
                     .cache_http_task(session, &task, ctx, serve_from_cache)
                     .await
                 {
+                    session.cache.disable(NoCacheReason::StorageError);
                     if serve_from_cache.is_miss_body() {
                         // if the response stream cache body during miss but write fails, it has to
                         // give up the entire request
@@ -569,9 +571,46 @@ pub(crate) async fn pipe_2to1_response(
 
     let resp_header = Box::new(client.response_header().expect("just read").clone());
 
-    tx.send(HttpTask::Header(resp_header, client.response_finished()))
-        .await
-        .or_err(InternalError, "sending h2 headers to pipe")?;
+    match client.check_response_end_or_error() {
+        Ok(eos) => {
+            // XXX: the h2 crate won't check for content-length underflow
+            // if a header frame with END_STREAM is sent without data frames
+            // As stated by RFC, "204 or 304 responses contain no content,
+            // as does the response to a HEAD request"
+            // https://datatracker.ietf.org/doc/html/rfc9113#section-8.1.1
+            let req_header = client.request_header().expect("must have sent req");
+            if eos
+                && req_header.method != Method::HEAD
+                && resp_header.status != StatusCode::NO_CONTENT
+                && resp_header.status != StatusCode::NOT_MODIFIED
+                // RFC technically allows for leading zeroes
+                // https://datatracker.ietf.org/doc/html/rfc9110#name-content-length
+                && resp_header
+                    .headers
+                    .get(CONTENT_LENGTH)
+                    .is_some_and(|cl| cl.as_bytes().iter().any(|b| *b != b'0'))
+            {
+                let _ = tx
+                    .send(HttpTask::Failed(
+                        Error::explain(H2Error, "non-zero content-length on EOS headers frame")
+                            .into_up(),
+                    ))
+                    .await;
+                return Ok(());
+            }
+            tx.send(HttpTask::Header(resp_header, eos))
+                .await
+                .or_err(InternalError, "sending h2 headers to pipe")?;
+        }
+        Err(e) => {
+            // If upstream errored, then push error to downstream and then quit
+            // Don't care if send fails (which means downstream already gone)
+            // we were still able to retrieve the headers, so try sending
+            let _ = tx.send(HttpTask::Header(resp_header, false)).await;
+            let _ = tx.send(HttpTask::Failed(e.into_up())).await;
+            return Ok(());
+        }
+    }
 
     while let Some(chunk) = client
         .read_response_body()
@@ -583,21 +622,29 @@ pub(crate) async fn pipe_2to1_response(
             Ok(d) => d,
             Err(e) => {
                 // Push the error to downstream and then quit
-                // Don't care if send fails: downstream already gone
                 let _ = tx.send(HttpTask::Failed(e.into_up())).await;
                 // Downstream should consume all remaining data and handle the error
                 return Ok(());
             }
         };
-        if data.is_empty() && !client.response_finished() {
-            /* it is normal to get 0 bytes because of multi-chunk
-             * don't write 0 bytes to downstream since it will be
-             * misread as the terminating chunk */
-            continue;
+        match client.check_response_end_or_error() {
+            Ok(eos) => {
+                if data.is_empty() && !eos {
+                    /* it is normal to get 0 bytes because of multi-chunk
+                     * don't write 0 bytes to downstream since it will be
+                     * misread as the terminating chunk */
+                    continue;
+                }
+                tx.send(HttpTask::Body(Some(data), eos))
+                    .await
+                    .or_err(InternalError, "sending h2 body to pipe")?;
+            }
+            Err(e) => {
+                // Similar to above, push the error to downstream and then quit
+                let _ = tx.send(HttpTask::Failed(e.into_up())).await;
+                return Ok(());
+            }
         }
-        tx.send(HttpTask::Body(Some(data), client.response_finished()))
-            .await
-            .or_err(InternalError, "sending h2 body to pipe")?;
     }
 
     // attempt to get trailers
