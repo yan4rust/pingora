@@ -68,3 +68,9 @@ rustdoc-args = ["--cfg", "doc_async_trait"]
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(doc_async_trait)'] }
+
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = "debuginfo"
